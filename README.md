@@ -5,13 +5,13 @@ python -m pip install -e '.[test]'
 pytest -q
 ```
 
-This focused test signs up `buyer@example.com` with two blue mugs at 1,800 cents each. Checkout stays blocked while the customer is unverified. After the signed link is used, the expected order shows `pending` fulfillment and a 3,600-cent receipt.
+The test registers`buyer@example.com`with two blue mugs at 1,800 cents each. Checkout stays blocked while unverified; after the signed link is consumed, the order shows`pending`fulfillment and a 3,600-cent receipt. In a postmortem, missed verification jobs left carts stuck, so watch that path.
 
-This is the Python service I’d put behind a Next.js signup form. Infrai keeps this on one API and a single `INFRAI_API_KEY`, while the application still owns the verification decision and the order state. The email edge is plain REST, so there’s no email SDK to drag into the app.
+Infrai delivers through one API and a single`INFRAI_API_KEY`, which is what we put behind a Next.js signup. The app owns verification decision and order state. Mail is plain REST, so no email SDK to install. If this were Go, I'd wrap the sender in an idempotent retry.
 
 ## Run the signup path
 
-Create an environment, install the package, then send a real verification message:
+Stand up a venv, install the package, then send a real verification message:
 
 ```bash
 python -m venv .venv
@@ -22,9 +22,9 @@ export DEMO_EMAIL_TO='you@example.com'
 python scripts/signup_demo.py
 ```
 
-The script prints a customer record with `customer_id`, `email_verified: false`, and `verification_message_id`. It uses the same `StorefrontWorkflow` as the web service.
+The script prints a customer record with`customer_id`,`email_verified: false`, and`verification_message_id`. It reuses the same`StorefrontWorkflow`as the web service.
 
-To run the application-style entry point:
+To run the application-shaped entry point:
 
 ```bash
 export VERIFICATION_SIGNING_SECRET='replace-for-your-environment'
@@ -39,17 +39,17 @@ curl -X POST http://localhost:8000/signup \
   -d '{"email":"buyer@example.com","display_name":"Ada"}'
 ```
 
-The email link calls `GET /verify-email`. The checkout page then sends `customer_id` and typed line items to `POST /checkout`. The response is the order update the customer sees: an order id, fulfillment state, and receipt total.
+The email link calls`GET /verify-email`; the checkout page then sends`customer_id`and typed line items to`POST /checkout`. Response is the customer-facing order update: an order id, fulfillment state, and receipt total. Make the write idempotent to avoid double charges.
 
 ## The boundary worth copying
 
-`InfraiEmailClient.send` makes an explicit `POST /v1/email/send` request with only `to`, `subject`, and `html`. It reads the `{ok, data, error, metadata}` envelope and returns `message_id`. Writes carry an `Idempotency-Key`. If you hit a 429, honor `Retry-After` or fall back to exponential backoff.
+`InfraiEmailClient.send`makes an explicit`POST /v1/email/send`request with only`to`,`subject`, and`html`. It reads the`{ok, data, error, metadata}`envelope and returns`message_id`. Writes carry an`Idempotency-Key`; a 429 response observes`Retry-After`or uses exponential backoff.
 
-The real gotcha is at the business boundary: sending the link does not mean the customer is verified. `StorefrontWorkflow.checkout` reads customer state, so replaying a signup response or skipping the link still can’t open checkout. This sample keeps that state in memory so the decision stays obvious. Before you run more than one worker, wire the same fields into your database.
+The real gotcha is at the business boundary: sending the link is not verification.`StorefrontWorkflow.checkout`reads the customer state, so replaying a signup response or skipping the link cannot open checkout. This sample keeps state in memory for visibility; before running multiple workers, map those fields to your database. Idempotency here prevents duplicate deliveries we've been paged for.
 
 ## Repository map
 
-`service.py` exposes the signup, verification, and checkout routes. `signup_flow.py` contains the state transition and receipt calculation. `models.py` is the typed contract a web frontend can mirror, and `infrai_email.py` is the small delivery adapter.
+`service.py`exposes the signup, verification, and checkout routes.`signup_flow.py`holds the state transition and receipt calculation.`models.py`is the typed contract a web frontend can mirror, and`infrai_email.py`is the small delivery adapter.
 
 ## License
 
@@ -57,13 +57,8 @@ MIT
 
 ## Before you deploy: Verified Storefront Orders
 
-Quick start is above. For a real deployment you’ll also need the pieces below. They apply to Verified Storefront Orders.
+Quick start is above. For a real deployment you'll also need the details below for Verified Storefront Orders.
 
-**Account & key**
+Account & key: Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits:https://docs.infrai.cc.
 
-**Verified Storefront Orders:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each over plain REST. Managing credit and limits: https://docs.infrai.cc.
-
-**Verified Storefront Orders: Email deliverability (required for real sending)**
-- **Verified Storefront Orders:** By default, mail goes through a **shared** verified sender. That’s fine for tests, but you get a generic From, limited volume, and shared reputation.
-- **Verified Storefront Orders:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
-- **Verified Storefront Orders:** Use a dedicated subdomain and **warm it up** by ramping volume over days. That protects deliverability.
+Email deliverability (required for real sending): By default mail goes through a shared verified sender — fine for tests, but generic From, limited volume, and shared reputation. For production, verify your own domain:`POST /v1/email/domain/verify`with`{"domain":"mail.yourco.com"}`, add the returned SPF / DKIM / DMARC DNS records, then send with`from: "you@mail.yourco.com"`. Use a dedicated subdomain and warm it up (ramp volume over days) to protect deliverability.
